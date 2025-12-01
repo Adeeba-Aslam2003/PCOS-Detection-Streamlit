@@ -6,19 +6,30 @@ import cv2
 import os
 import gdown
 
+
 st.set_page_config(page_title="PCOS Detection", layout="centered")
 
 # -------------- MODEL LOADING --------------
 @st.cache_resource
 def load_model():
-    model_path = os.path.join(os.path.dirname(__file__), "pcos_model.h5")
+    # We will store the downloaded model in the app folder
+    model_path = "pcos_model.h5"
+
+    # If the file is NOT present, download it from Google Drive
+    if not os.path.exists(model_path):
+        drive_url = "https://drive.google.com/uc?id=1VHnTaxeJ5eahbm9XgbYLax5cS85e0nJZ"
+        st.warning("Downloading PCOS model from Google Drive... (only first time)")
+        gdown.download(drive_url, model_path, quiet=False)
+
+    # Now load the model
     model = tf.keras.models.load_model(model_path)
 
-    # 🔥 IMPORTANT: run a dummy call to build the model
+    # Run a dummy prediction once so that Keras builds the model graph
     dummy_input = tf.zeros((1, 224, 224, 3))
-    model.predict(dummy_input)
+    _ = model.predict(dummy_input)
 
     return model
+
 
 
 def get_model():

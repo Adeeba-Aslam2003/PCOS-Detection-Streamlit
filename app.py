@@ -17,9 +17,10 @@ def load_model():
 
     # Download once from Google Drive if not present
     if not os.path.exists(model_path):
-        drive_url = "https://drive.google.com/uc?id=1VHnTaxeJ5eahbm9XgbYLax5cS85e0nJZ"
-        st.warning("Downloading PCOS model from Google Drive... (only first time)")
-        gdown.download(drive_url, model_path, quiet=False)
+    drive_url = "https://drive.google.com/uc?id=1qI08snWzWzq3IEGGKHZlU0lkSnAC1m_O"
+    st.warning("Downloading PCOS model from Google Drive... (only first time)")
+    gdown.download(drive_url, model_path, quiet=False)
+
 
     # Load Keras model
     model = tf.keras.models.load_model(model_path)

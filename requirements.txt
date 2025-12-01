@@ -1,7 +1,7 @@
 streamlit
 tensorflow
-gdown
 opencv-python-headless
 numpy
 Pillow
 scikit-learn
+gdown

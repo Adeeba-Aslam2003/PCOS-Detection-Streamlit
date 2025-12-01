@@ -11,13 +11,15 @@ st.set_page_config(page_title="PCOS Detection", layout="centered")
 # -------------- MODEL LOADING --------------
 @st.cache_resource
 def load_model():
-    model_path = "pcos_model.h5"
-    if not os.path.exists(model_path):
-        # Google Drive direct download link
-        url = "https://drive.google.com/uc?id=1VHnTaxeJ5eahbm9XgbYLax5cS85e0nJZ"
-        gdown.download(url, model_path, quiet=False)
+    model_path = os.path.join(os.path.dirname(__file__), "pcos_model.h5")
     model = tf.keras.models.load_model(model_path)
+
+    # 🔥 IMPORTANT: run a dummy call to build the model
+    dummy_input = tf.zeros((1, 224, 224, 3))
+    model.predict(dummy_input)
+
     return model
+
 
 def get_model():
     return load_model()

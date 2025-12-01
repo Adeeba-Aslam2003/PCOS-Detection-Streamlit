@@ -32,30 +32,38 @@ def preprocess_image(image: Image.Image, img_size=(224, 224)):
     arr = np.expand_dims(arr, axis=0)
     return arr, np.array(img)
 
-def make_gradcam_heatmap(img_array, model, last_conv_layer_name):
-    try:
-        last_conv_layer = model.get_layer(last_conv_layer_name)
-    except ValueError:
-        raise ValueError(f"Layer {last_conv_layer_name} not found. Check model.summary().")
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name="last_conv"):
+    # Get the last convolutional layer
+    last_conv_layer = model.get_layer(last_conv_layer_name)
 
+    # Create a model that maps input → last conv layer output + final output
     grad_model = tf.keras.models.Model(
-        [model.inputs], 
-        [last_conv_layer.output, model.output]
+        inputs=model.input,
+        outputs=[last_conv_layer.output, model.output]
     )
 
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
-        loss = predictions[:, 0]
+        pred_index = tf.argmax(predictions[0])
+        loss = predictions[:, pred_index]
 
+    # Compute gradients of loss w.r.t conv layer output
     grads = tape.gradient(loss, conv_outputs)
+
+    # Mean intensity of gradients over each channel
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
 
     conv_outputs = conv_outputs[0]
+
+    # Weight channels by corresponding gradients
     heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
 
+    # Normalize heatmap
     heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
+
     return heatmap.numpy()
+
 
 def overlay_heatmap(original_img, heatmap, alpha=0.4):
     h, w, _ = original_img.shape

@@ -8,30 +8,36 @@ import gdown
 
 st.set_page_config(page_title="PCOS Detection", layout="centered")
 
-
-# -----------------------------------------
-# 1. Download + Load Model from Google Drive
-# -----------------------------------------
+# -------------------------------------------------
+# 🔹 DOWNLOAD MODEL FROM GOOGLE DRIVE (only first time)
+# -------------------------------------------------
 @st.cache_resource
 def load_model():
-    model_path = "pcos_model.keras"
+    model_path = "pcos_model.keras"  # NEW MODEL
+
+    # Google Drive direct download link
+    drive_url = "https://drive.google.com/uc?id=1d0jvYwVn-2fGBvq8bp5iTII7VbZQikBB"
+
     if not os.path.exists(model_path):
-        st.warning("Downloading PCOS model from Google Drive… (first time only)")
-        drive_url = "https://drive.google.com/uc?id=1d0jvYwVn-2fGBvq8bp5iTII7VbZQikBB"
+        st.warning("Downloading PCOS model from Google Drive... (first time only)")
         gdown.download(drive_url, model_path, quiet=False)
+
     model = tf.keras.models.load_model(model_path)
-    # Force model build (needed for Grad-CAM)
-    dummy = tf.zeros((1, 224, 224, 3))
-    model.predict(dummy)
+
+    # Build once to avoid 'never been called' issue
+    dummy_input = tf.zeros((1, 224, 224, 3))
+    _ = model.predict(dummy_input)
+
     return model
+
 
 def get_model():
     return load_model()
 
 
-# -----------------------------------------
-# 2. Image Preprocessing
-# -----------------------------------------
+# -------------------------------------------------
+# 🔹 PREPROCESSING
+# -------------------------------------------------
 def preprocess_image(image: Image.Image, img_size=(224, 224)):
     img = image.convert("RGB")
     img = img.resize(img_size)
@@ -40,24 +46,40 @@ def preprocess_image(image: Image.Image, img_size=(224, 224)):
     return arr, np.array(img)
 
 
-# -----------------------------------------
-# 3. Grad-CAM Heatmap Function
-# -----------------------------------------
-def make_gradcam_heatmap(img_array, model, last_conv_layer_name="last_conv"):
-    last_conv = model.get_layer(last_conv_layer_name)
+# -------------------------------------------------
+# 🔹 AUTO-DETECT LAST CONV2D LAYER (IMPORTANT FIX)
+# -------------------------------------------------
+def find_last_conv_layer(model):
+    for layer in reversed(model.layers):
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            return layer.name
+    raise ValueError("No Conv2D layer found in model!")
+
+
+# -------------------------------------------------
+# 🔹 GRAD-CAM HEATMAP
+# -------------------------------------------------
+def make_gradcam_heatmap(img_array, model, last_conv_layer_name):
+    last_conv_layer = model.get_layer(last_conv_layer_name)
+
     grad_model = tf.keras.models.Model(
         inputs=model.input,
-        outputs=[last_conv.output, model.output]
+        outputs=[last_conv_layer.output, model.output]
     )
+
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(img_array)
-        loss = predictions[:, 0]
+        pred_index = tf.argmax(predictions[0])
+        loss = predictions[:, pred_index]
+
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
     conv_outputs = conv_outputs[0]
     heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
     heatmap = tf.squeeze(heatmap)
-    heatmap = tf.maximum(heatmap, 0) / (tf.reduce_max(heatmap) + 1e-8)
+
+    heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy()
 
 
@@ -70,38 +92,43 @@ def overlay_heatmap(original_img, heatmap, alpha=0.4):
     return superimposed
 
 
-# -----------------------------------------
-# 4. Simple Login Page
-# -----------------------------------------
+# -------------------------------------------------
+# 🔹 LOGIN SYSTEM
+# -------------------------------------------------
 VALID_USER = "doctor"
 VALID_PASS = "12345"
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+
 def login_page():
     st.title("🔐 PCOS Detection Login")
-    user = st.text_input("Username")
-    pwd = st.text_input("Password", type="password")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
     if st.button("Login"):
-        if user == VALID_USER and pwd == VALID_PASS:
+        if username == VALID_USER and password == VALID_PASS:
             st.session_state.logged_in = True
             st.success("Login successful!")
         else:
             st.error("Invalid username or password")
+
 
 if not st.session_state.logged_in:
     login_page()
     st.stop()
 
 
-# -----------------------------------------
-# 5. Main UI
-# -----------------------------------------
+# -------------------------------------------------
+# 🔹 MAIN APP UI
+# -------------------------------------------------
 st.title("🩺 PCOS Detection from Pelvic Ultrasound")
-st.write("**Educational demo — not for clinical use.**")
+st.write("**Educational demo only – not for clinical use.**")
 
-uploaded_file = st.file_uploader("Upload pelvic ultrasound image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader(
+    "Upload pelvic ultrasound image",
+    type=["png", "jpg", "jpeg"]
+)
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
@@ -118,19 +145,27 @@ if uploaded_file is not None:
 
             st.subheader("Prediction")
             st.write(f"**Result:** {label}")
-            st.write(f"**Probability:** {prob:.2f}")
+            st.write(f"**Probability (PCOS):** {prob:.2f}")
 
             # Grad-CAM
             try:
-                heatmap = make_gradcam_heatmap(img_array, model, last_conv_layer_name="last_conv")
-                display_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-                cam = overlay_heatmap(display_bgr, heatmap)
-                cam_rgb = cv2.cvtColor(cam, cv2.COLOR_BGR2RGB)
+                last_conv = find_last_conv_layer(model)
+
+                heatmap = make_gradcam_heatmap(
+                    img_array,
+                    model,
+                    last_conv_layer_name=last_conv,
+                )
+
+                display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
+                superimposed = overlay_heatmap(display_img_bgr, heatmap)
+                superimposed_rgb = cv2.cvtColor(superimposed, cv2.COLOR_BGR2RGB)
 
                 st.subheader("Model Focus Heatmap (Grad-CAM)")
-                st.image(cam_rgb, use_column_width=True)
+                st.image(superimposed_rgb, use_column_width=True)
+
             except Exception as e:
                 st.error(f"🔥 Heatmap error: {e}")
 
 st.markdown("---")
-st.caption("Built with TensorFlow, Keras, OpenCV, and Streamlit")
+st.caption("Built with ❤️ using TensorFlow, Keras, OpenCV, and Streamlit")

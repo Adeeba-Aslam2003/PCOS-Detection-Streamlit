@@ -6,117 +6,13 @@ import cv2
 import os
 import gdown
 
-st.set_page_config(page_title="PCOS Detection", layout="centered")
+# -------------------------------------------------
+# PAGE CONFIG
+# -------------------------------------------------
+st.set_page_config(page_title="PCOS Detection System", layout="centered")
 
 # -------------------------------------------------
-# 🔹 DOWNLOAD MODEL FROM GOOGLE DRIVE (only first time)
-# -------------------------------------------------
-@st.cache_resource
-def load_model():
-    model_path = "pcos_model.keras"  # NEW .keras model
-
-    # Your latest Drive link:
-    drive_url = "https://drive.google.com/uc?id=1d0jvYwVn-2fGBvq8bp5iTII7VbZQikBB"
-
-    if not os.path.exists(model_path):
-        st.warning("Downloading PCOS model from Google Drive... (first time only)")
-        gdown.download(drive_url, model_path, quiet=False)
-
-    model = tf.keras.models.load_model(model_path)
-
-    # Optional: warm-up call (not strictly needed with the new Grad-CAM code,
-    # but harmless)
-    dummy_input = tf.zeros((1, 224, 224, 3))
-    _ = model.predict(dummy_input)
-
-    return model
-
-
-def get_model():
-    return load_model()
-
-
-# -------------------------------------------------
-# 🔹 PREPROCESSING  (IMPORTANT: no manual /255 now)
-# -------------------------------------------------
-def preprocess_image(image: Image.Image, img_size=(224, 224)):
-    img = image.convert("RGB")
-    img = img.resize(img_size)
-    # DO NOT divide by 255 here – model already has a Rescaling(1/255) layer
-    arr = np.array(img).astype("float32")
-    arr = np.expand_dims(arr, axis=0)  # shape (1, 224, 224, 3)
-    return arr, np.array(img)
-
-
-# -------------------------------------------------
-# 🔹 AUTO-DETECT LAST CONV2D LAYER
-# -------------------------------------------------
-def find_last_conv_layer(model):
-    for layer in reversed(model.layers):
-        if isinstance(layer, tf.keras.layers.Conv2D):
-            return layer.name
-    raise ValueError("No Conv2D layer found in model!")
-
-
-# -------------------------------------------------
-# 🔹 GRAD-CAM HEATMAP (robust for Sequential models)
-# -------------------------------------------------
-def make_gradcam_heatmap(img_array, model, last_conv_layer_name):
-    """
-    Rebuilds a small functional graph layer-by-layer from your Sequential model,
-    so we never see 'sequential has never been called' again.
-    """
-    # Determine expected input shape (e.g. (224, 224, 3))
-    input_shape = model.input_shape[1:]
-    inputs = tf.keras.Input(shape=input_shape)
-
-    x = inputs
-    last_conv_output = None
-
-    # Re-run all layers on the new Input tensor
-    for layer in model.layers:
-        x = layer(x)
-        if layer.name == last_conv_layer_name:
-            last_conv_output = x
-
-    if last_conv_output is None:
-        raise ValueError(f"Could not find conv layer {last_conv_layer_name}")
-
-    preds = x
-
-    # Model that outputs both conv feature maps and final predictions
-    grad_model = tf.keras.Model(inputs=inputs,
-                                outputs=[last_conv_output, preds])
-
-    # Compute gradients
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_array)
-        pred_index = tf.argmax(predictions[0])
-        loss = predictions[:, pred_index]
-
-    grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-
-    conv_outputs = conv_outputs[0]  # remove batch dim
-    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
-    heatmap = tf.squeeze(heatmap)
-
-    # Normalize to [0, 1]
-    heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
-    return heatmap.numpy()
-
-
-def overlay_heatmap(original_img, heatmap, alpha=0.4):
-    h, w, _ = original_img.shape
-    heatmap = cv2.resize(heatmap, (w, h))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    superimposed = cv2.addWeighted(heatmap, alpha, original_img, 1 - alpha, 0)
-    return superimposed
-
-
-# -------------------------------------------------
-# 🔹 LOGIN SYSTEM
+# LOGIN SYSTEM
 # -------------------------------------------------
 VALID_USER = "doctor"
 VALID_PASS = "12345"
@@ -124,11 +20,11 @@ VALID_PASS = "12345"
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-
 def login_page():
     st.title("🔐 PCOS Detection Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
+
     if st.button("Login"):
         if username == VALID_USER and password == VALID_PASS:
             st.session_state.logged_in = True
@@ -136,59 +32,244 @@ def login_page():
         else:
             st.error("Invalid username or password")
 
-
 if not st.session_state.logged_in:
     login_page()
     st.stop()
 
 
 # -------------------------------------------------
-# 🔹 MAIN APP UI
+# PROJECT OVERVIEW SECTION (FYP Requirement)
+# -------------------------------------------------
+st.title("PCOS Detection System 🩺")
+
+st.markdown("""
+### 📊 **Project Overview**
+
+This system uses **Deep Learning (Convolutional Neural Networks)** to detect  
+**Polycystic Ovary Syndrome (PCOS)** from pelvic ultrasound images.
+
+It performs:
+- Image preprocessing  
+- CNN-based classification  
+- Grad-CAM heatmap explainability  
+- Health recommendations  
+
+> ⚠️ **Note:** Academic project — not a medical diagnostic tool.
+""")
+
+st.markdown("---")
+
+# -------------------------------------------------
+# DATASET & MODEL INFO SECTION
+# -------------------------------------------------
+st.subheader("📂 Dataset & Model Information")
+
+st.markdown("""
+### 📁 **Dataset Details**
+- Two classes: **PCOS** and **Normal**
+- Ultrasound pelvic images
+- Resized to **224 × 224**
+- Augmentation used during training:
+  - Rotation
+  - Zoom
+  - Horizontal & vertical flipping
+- Normalization applied using **Rescaling(1/255)** inside the model
+
+### 🧠 **CNN Model Architecture**
+- Input → Rescaling
+- Conv2D + MaxPooling2D (x3)
+- Flatten
+- Dense layer
+- Dropout layer
+- Final Sigmoid Output Layer
+
+This structure is ideal for ultrasound classification tasks.
+""")
+
+st.markdown("---")
+
+
+# -------------------------------------------------
+# MODEL LOADING (Your original working code)
+# -------------------------------------------------
+@st.cache_resource
+def load_model():
+    model_path = "pcos_model.keras"
+    drive_url = "https://drive.google.com/uc?id=1d0jvYwVn-2fGBvq8bp5iTII7VbZQikBB"
+
+    if not os.path.exists(model_path):
+        st.warning("Downloading PCOS model... (first time only)")
+        gdown.download(drive_url, model_path, quiet=False)
+
+    model = tf.keras.models.load_model(model_path)
+
+    # Warm-up call
+    dummy = tf.zeros((1, 224, 224, 3))
+    model.predict(dummy)
+
+    return model
+
+def get_model():
+    return load_model()
+
+
+# -------------------------------------------------
+# IMAGE PREPROCESSING
+# -------------------------------------------------
+def preprocess_image(image: Image.Image, img_size=(224, 224)):
+    img = image.convert("RGB")
+    img = img.resize(img_size)
+
+    # IMPORTANT: Do NOT divide by 255 here (model already has Rescaling)
+    arr = np.array(img).astype("float32")
+    arr = np.expand_dims(arr, axis=0)
+
+    return arr, np.array(img)
+
+
+# -------------------------------------------------
+# AUTO-DETECT LAST CONV LAYER
+# -------------------------------------------------
+def find_last_conv_layer(model):
+    for layer in reversed(model.layers):
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            return layer.name
+    raise ValueError("No Conv2D layer found!")
+
+
+# -------------------------------------------------
+# GRAD-CAM IMPLEMENTATION
+# -------------------------------------------------
+def make_gradcam_heatmap(img_array, model, last_conv_name):
+
+    # rebuild model to avoid "sequential not called" error
+    inputs = tf.keras.Input(shape=model.input_shape[1:])
+    x = inputs
+    last_conv_output = None
+
+    for layer in model.layers:
+        x = layer(x)
+        if layer.name == last_conv_name:
+            last_conv_output = x
+
+    grad_model = tf.keras.Model(inputs, [last_conv_output, x])
+
+    with tf.GradientTape() as tape:
+        conv_out, preds = grad_model(img_array)
+        pred_index = tf.argmax(preds[0])
+        loss = preds[:, pred_index]
+
+    grads = tape.gradient(loss, conv_out)
+    pooled = tf.reduce_mean(grads, axis=(0,1,2))
+
+    conv_out = conv_out[0]
+
+    heatmap = conv_out @ pooled[..., tf.newaxis]
+    heatmap = tf.squeeze(heatmap)
+    heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
+
+    return heatmap.numpy()
+
+
+# -------------------------------------------------
+# HEATMAP OVERLAY
+# -------------------------------------------------
+def overlay_heatmap(original_img, heatmap, alpha=0.4):
+    h, w, _ = original_img.shape
+    heatmap = cv2.resize(heatmap, (w, h))
+    heatmap = np.uint8(255 * heatmap)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    final = cv2.addWeighted(heatmap, alpha, original_img, 1 - alpha, 0)
+    return final
+
+
+# -------------------------------------------------
+# MAIN DETECTION INTERFACE
 # -------------------------------------------------
 st.title("🩺 PCOS Detection from Pelvic Ultrasound")
-st.write("**Educational demo only – not for clinical use.**")
+st.write("Upload an ultrasound image to begin:")
 
-uploaded_file = st.file_uploader(
-    "Upload pelvic ultrasound image",
-    type=["png", "jpg", "jpeg"]
-)
+uploaded_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
+
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+    st.image(image, caption="Uploaded Image")
 
     if st.button("Analyze"):
-        with st.spinner("Running model..."):
-            model = get_model()
-            img_array, display_img = preprocess_image(image)
+        with st.spinner("Analyzing ultrasound..."):
 
-            # ---------- Prediction ----------
+            model = get_model()
+            img_array, img_display = preprocess_image(image)
+
+            # ----- PREDICTION -----
             prob = float(model.predict(img_array)[0][0])
             label = "PCOS likely" if prob >= 0.5 else "PCOS unlikely"
 
-            st.subheader("Prediction")
+            st.subheader("Prediction Result")
             st.write(f"**Result:** {label}")
             st.write(f"**Probability (PCOS):** {prob:.2f}")
 
-            # ---------- Grad-CAM ----------
+            # ----- GRAD-CAM -----
             try:
                 last_conv = find_last_conv_layer(model)
+                heatmap = make_gradcam_heatmap(img_array, model, last_conv)
 
-                heatmap = make_gradcam_heatmap(
-                    img_array,
-                    model,
-                    last_conv_layer_name=last_conv,
-                )
+                bgr_img = cv2.cvtColor(img_display, cv2.COLOR_RGB2BGR)
+                final = overlay_heatmap(bgr_img, heatmap)
+                final_rgb = cv2.cvtColor(final, cv2.COLOR_BGR2RGB)
 
-                display_img_bgr = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
-                superimposed = overlay_heatmap(display_img_bgr, heatmap)
-                superimposed_rgb = cv2.cvtColor(superimposed, cv2.COLOR_BGR2RGB)
-
-                st.subheader("Model Focus Heatmap (Grad-CAM)")
-                st.image(superimposed_rgb, use_column_width=True)
-
+                st.subheader("Grad-CAM Heatmap")
+                st.image(final_rgb)
             except Exception as e:
-                st.error(f"🔥 Heatmap error: {e}")
+                st.error(f"Heatmap Error: {e}")
+
+
+            # -------------------------------------------------
+            # DETAILED INTERPRETATION & RECOMMENDATIONS
+            # -------------------------------------------------
+            st.markdown("---")
+            st.subheader("📌 Interpretation & Health Recommendations")
+
+            if label == "PCOS likely":
+                st.markdown("### 🩺 Why the Model Detected PCOS")
+                st.write("""
+- Multiple small follicles  
+- String-of-pearls ovarian pattern  
+- Enlarged ovary  
+- Dense stromal region  
+                """)
+
+                st.markdown("### 🌿 What To Do Next")
+                st.write("""
+**Lifestyle & Exercise:**
+- 30–45 mins walking/jogging  
+- Yoga (Butterfly, Cobbler, Surya Namaskar)  
+- Avoid long sitting hours  
+
+**Diet:**
+- Greens, oats, lentils, eggs, paneer  
+- Walnuts, almonds, olive oil  
+- Avoid sugar, junk food, packaged snacks  
+
+**Medical Advice:**
+- Track menstrual cycles  
+- Consult gynecologist  
+- Hormonal tests if symptoms persist  
+                """)
+
+            else:
+                st.markdown("### 😊 PCOS Unlikely")
+                st.write("""
+This image does not show major PCOS indicators.
+
+**Maintain Good Health:**
+- Balanced diet  
+- 30 minutes exercise daily  
+- Avoid stress  
+- Sleep 7–8 hours  
+- Regular checkups yearly  
+                """)
 
 st.markdown("---")
-st.caption("Built with ❤️ using TensorFlow, Keras, OpenCV, and Streamlit")
+st.caption("Built with TensorFlow, Keras, OpenCV & Streamlit.")

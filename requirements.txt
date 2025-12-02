@@ -4,3 +4,6 @@ numpy
 Pillow
 opencv-python-headless
 gdown
+pandas
+matplotlib
+reportlab
